@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from planning.pddl import ActionSchema, State, Objects
+from planning.pddl import ActionSchema, State, Objects, get_all_groundings, get_applicable_actions
 
 
 def nullHeuristic(
@@ -44,9 +44,39 @@ def ignorePreconditionsHeuristic(
          with the initial state, or generate all groundings regardless of state).
          Remember: with no preconditions, every grounding is "applicable".
     """
-    ### Your code here ###
+    # Calcular los fluentes de la meta que aun no estan en el estado
+    insatisfechos = goal - state
+    if len(insatisfechos) == 0:
+        return 0
 
-    ### End of your code ###
+    # Obtener todas las acciones grounded (sin precondiciones, todas son aplicables)
+    todas_las_acciones = get_all_groundings(domain, objects)
+
+    pasos = 0
+
+    while len(insatisfechos) > 0:
+        mejor_accion = None
+        mejor_cuenta = -1
+
+        # Buscar la accion que cubra mas fluentes insatisfechos
+        for accion in todas_las_acciones:
+            cuenta = 0
+            for fluente in accion.add_list:
+                if fluente in insatisfechos:
+                    cuenta = cuenta + 1
+            if cuenta > mejor_cuenta:
+                mejor_cuenta = cuenta
+                mejor_accion = accion
+
+        if mejor_cuenta <= 0:
+            break
+
+        # Remover los fluentes cubiertos por la mejor accion
+        insatisfechos = insatisfechos - mejor_accion.add_list
+
+        pasos = pasos + 1
+
+    return pasos
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +108,37 @@ def ignoreDeleteListsHeuristic(
          Use get_applicable_actions to enumerate applicable grounded actions at
          each step (preconditions still apply in the relaxed model).
     """
-    ### Your code here ###
+    # Empezar desde el estado actual
+    estado_relajado = state
+    pasos = 0
+    max_pasos = 100
 
-    ### End of your code ###
+    while not goal.issubset(estado_relajado) and pasos < max_pasos:
+
+        # Obtener acciones aplicables en el estado actual
+        acciones_aplicables = get_applicable_actions(estado_relajado, domain, objects)
+
+        if len(acciones_aplicables) == 0:
+            break
+
+        mejor_accion = None
+        mejor_cuenta = -1
+
+        # Buscar la accion que agregue mas fluentes de la meta aun no satisfechos
+        for accion in acciones_aplicables:
+            cuenta = 0
+            for fluente in accion.add_list:
+                if fluente in goal and fluente not in estado_relajado:
+                    cuenta = cuenta + 1
+            if cuenta > mejor_cuenta:
+                mejor_cuenta = cuenta
+                mejor_accion = accion
+
+        if mejor_cuenta <= 0:
+            break
+
+        # Aplicar la accion sin borrar (solo agregar, ignorar del_list)
+        estado_relajado = estado_relajado | mejor_accion.add_list
+        pasos = pasos + 1
+
+    return pasos

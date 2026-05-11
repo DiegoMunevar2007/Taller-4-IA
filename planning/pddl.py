@@ -171,9 +171,17 @@ def is_applicable(state: State, action: Action) -> bool:
 
     Tip: frozenset supports the .issubset() method and the .isdisjoint() method.
     """
-    ### Your code here ###
-    return False
-    ### End of your code ###
+    # Verificar que todas las precondiciones positivas esten en el estado
+    for fluente in action.precond_pos:
+        if fluente not in state:
+            return False
+
+    # Verificar que ninguna precondicion negativa este en el estado
+    for fluente in action.precond_neg:
+        if fluente in state:
+            return False
+
+    return True
 
 
 def apply_action(state: State, action: Action) -> State:
@@ -185,9 +193,11 @@ def apply_action(state: State, action: Action) -> State:
     Tip: frozenset supports set arithmetic: `|` (union) and `-` (difference).
     The order matters: first remove del_list, then add add_list.
     """
-    ### Your code here ###
-    return frozenset({})
-    ### End of your code ###
+    # RESULT(s, a) = (s - DEL(a)) ∪ ADD(a)
+    # Primero se quitan los fluentes de del_list, luego se agregan los de add_list
+    estado_temporal = state - action.del_list
+    estado_nuevo = estado_temporal | action.add_list
+    return estado_nuevo
 
 
 def get_all_groundings(domain: list[ActionSchema], objects: Objects) -> list[Action]:
@@ -240,6 +250,13 @@ def get_applicable_actions(
          Then call action_schema.ground(binding) and is_applicable(state, grounded).
          Or use get_all_groundings() and filter the results by applicability.
     """
-    ### Your code here ###
-    return []
-    ### End of your code ###
+    # Obtener todas las acciones grounded posibles
+    todas_las_acciones = get_all_groundings(domain, objects)
+
+    # Filtrar solo las que son aplicables en el estado actual
+    acciones_aplicables = []
+    for accion in todas_las_acciones:
+        if is_applicable(state, accion):
+            acciones_aplicables.append(accion)
+
+    return acciones_aplicables
