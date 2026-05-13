@@ -177,7 +177,7 @@ def forwardBFS(problem: Problem) -> list[Action]:
     return []
 
 
-def regress(goal_set: State, action: Action) -> State | None:
+def regress(conjunto_meta: State, accion: Action) -> State | None:
     """
     Compute the regression of goal_set through action.
 
@@ -193,26 +193,17 @@ def regress(goal_set: State, action: Action) -> State | None:
     Tip: Use frozenset operations: intersection (&), difference (-), union (|).
          Check relevance first, then check for contradictions, then compute.
     """
-    # Verificar si la accion es relevante: debe agregar al menos un fluente de la meta
-    es_relevante = False
-    for fluente in action.add_list:
-        if fluente in goal_set:
-            es_relevante = True
-            break
-
-    if not es_relevante:
+    # Verificar relevancia con interseccion de conjuntos
+    if not (accion.add_list & conjunto_meta):
         return None
 
     # Verificar que la accion no borre ningun fluente de la meta
-    for fluente in action.del_list:
-        if fluente in goal_set:
-            return None
+    if accion.del_list & conjunto_meta:
+        return None
 
     # REGRESS(g, a) = (g - ADD(a)) ∪ PRECOND_pos(a)
-    nuevo_goal = goal_set - action.add_list
-    nuevo_goal = nuevo_goal | action.precond_pos
-    return nuevo_goal
-
+    nuevo_conjunto = (conjunto_meta - accion.add_list) | accion.precond_pos
+    return nuevo_conjunto
 
 def backwardSearch(problem: Problem) -> list[Action]:
     """
@@ -233,41 +224,28 @@ def backwardSearch(problem: Problem) -> list[Action]:
          Pickable) that are false in the initial state — these are dead ends.
     """
     # Obtener todas las acciones grounded posibles
-    from planning.pddl import get_all_groundings
     todas_las_acciones = get_all_groundings(problem.domain, problem.objects)
 
     # Predicados estaticos que no cambian durante la ejecucion
     predicados_estaticos = ["MedicalPost", "Adjacent", "Pickable"]
 
-    # Indice: para cada tipo de fluente, que acciones lo agregan
-    # Esto acelera la busqueda de acciones relevantes
-    acciones_por_tipo = {}
+    # Indice: para cada fluente especifico, que acciones lo agregan
+    # Esto permite obtener solo las acciones relevantes para cada subgoal
+    fluente_a_acciones = {}
     for accion in todas_las_acciones:
         for fluente in accion.add_list:
-            tipo = fluente[0]
-            if tipo not in acciones_por_tipo:
-                acciones_por_tipo[tipo] = []
-            acciones_por_tipo[tipo].append(accion)
+            if fluente not in fluente_a_acciones:
+                fluente_a_acciones[fluente] = []
+            fluente_a_acciones[fluente].append(accion)
 
     # Usar cola (BFS) para encontrar el plan mas corto
-    from planning.utils import Queue
     cola = Queue()
     cola.push((problem.goal, []))
     visitados = set()
     visitados.add(problem.goal)
-    max_profundidad = 12
-    total_nodos = 0
-    max_nodos = 200000
 
     while not cola.isEmpty():
         subgoal, plan = cola.pop()
-
-        total_nodos = total_nodos + 1
-        if total_nodos > max_nodos:
-            break
-
-        if len(plan) > max_profundidad:
-            continue
 
         # Verificar si el subgoal se cumple desde el estado inicial
         se_cumple = True
@@ -279,49 +257,37 @@ def backwardSearch(problem: Problem) -> list[Action]:
         if se_cumple:
             return plan
 
-        # Recolectar acciones relevantes usando el indice por tipo
-        tipos_en_subgoal = set()
+        # Usar el indice por fluente especifico para obtener acciones relevantes
+        acciones_vistas = set()
         for fluente in subgoal:
-            tipos_en_subgoal.add(fluente[0])
+            if fluente in fluente_a_acciones:
+                for accion in fluente_a_acciones[fluente]:
+                    if accion in acciones_vistas:
+                        continue
+                    acciones_vistas.add(accion)
 
-        acciones_a_revisar = []
-        for tipo in tipos_en_subgoal:
-            if tipo in acciones_por_tipo:
-                for accion in acciones_por_tipo[tipo]:
-                    if accion not in acciones_a_revisar:
-                        acciones_a_revisar.append(accion)
+                    nuevo_subgoal = regress(subgoal, accion)
+                    if nuevo_subgoal is None:
+                        continue
 
-        for accion in acciones_a_revisar:
-            # Verificar relevancia solo con fluentes del subgoal
-            es_relevante = False
-            for fluente in accion.add_list:
-                if fluente in subgoal:
-                    es_relevante = True
-                    break
+                    # Verificar predicados estaticos falsos
+                    es_valido = True
+                    for fl in nuevo_subgoal:
+                        if fl[0] in predicados_estaticos:
+                            if fl not in problem.initial_state:
+                                es_valido = False
+                                break
 
-            if not es_relevante:
-                continue
+                    if not es_valido:
+                        continue
 
-            nuevo_subgoal = regress(subgoal, accion)
-            if nuevo_subgoal is None:
-                continue
-
-            # Verificar predicados estaticos falsos
-            es_valido = True
-            for fluente in nuevo_subgoal:
-                if fluente[0] in ("MedicalPost", "Adjacent", "Pickable"):
-                    if fluente not in problem.initial_state:
-                        es_valido = False
-                        break
-
-            if not es_valido:
-                continue
-
-            if nuevo_subgoal not in visitados:
-                visitados.add(nuevo_subgoal)
-                cola.push((nuevo_subgoal, [accion] + plan))
+                    if nuevo_subgoal not in visitados:
+                        visitados.add(nuevo_subgoal)
+                        cola.push((nuevo_subgoal, [accion] + plan))
 
     return []
+
+
 
 
 # ---------------------------------------------------------------------------

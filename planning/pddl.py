@@ -161,7 +161,7 @@ class Problem:
 # ---------------------------------------------------------------------------
 
 
-def is_applicable(state: State, action: Action) -> bool:
+def is_applicable(estado: State, accion: Action) -> bool:
     """
     Return True if action can be executed in state.
 
@@ -171,16 +171,10 @@ def is_applicable(state: State, action: Action) -> bool:
 
     Tip: frozenset supports the .issubset() method and the .isdisjoint() method.
     """
-    # Verificar que todas las precondiciones positivas esten en el estado
-    for fluente in action.precond_pos:
-        if fluente not in state:
-            return False
-
-    # Verificar que ninguna precondicion negativa este en el estado
-    for fluente in action.precond_neg:
-        if fluente in state:
-            return False
-
+    if not accion.precond_pos.issubset(estado):
+        return False
+    if not accion.precond_neg.isdisjoint(estado):
+        return False
     return True
 
 

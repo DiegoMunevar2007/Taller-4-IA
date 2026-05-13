@@ -66,19 +66,15 @@ def hierarchicalSearch(problem: Problem, hlas: list[HLA]) -> list[Action]:
     from planning.utils import Queue
     plan_inicial = [hlas[0]]
 
-    # Cola para BFS: cada elemento es un plan parcial
+    # Buscar el indice del primer HLA en el plan inicial
+    indice_inicial = 0
+
+    # Cola para BFS: cada elemento es un par (plan, indice_del_primer_hla)
     cola = Queue()
-    cola.push(plan_inicial)
+    cola.push((plan_inicial, indice_inicial))
 
     while not cola.isEmpty():
-        plan = cola.pop()
-
-        # Buscar el primer paso no primitivo (HLA) en el plan
-        indice_hla = -1
-        for i in range(len(plan)):
-            if not is_primitive(plan[i]):
-                indice_hla = i
-                break
+        plan, indice_hla = cola.pop()
 
         if indice_hla == -1:
             # El plan es completamente primitivo
@@ -98,27 +94,47 @@ def hierarchicalSearch(problem: Problem, hlas: list[HLA]) -> list[Action]:
             hla = plan[indice_hla]
             for refinamiento in hla.refinements:
                 nuevo_plan = plan[:indice_hla] + refinamiento + plan[indice_hla + 1:]
-                cola.push(nuevo_plan)
+                # Buscar el siguiente HLA en el nuevo plan empezando desde la misma posicion
+                nuevo_indice = -1
+                for i in range(indice_hla, len(nuevo_plan)):
+                    if not is_primitive(nuevo_plan[i]):
+                        nuevo_indice = i
+                        break
+                cola.push((nuevo_plan, nuevo_indice))
 
     return []
 
 
+def encontrar_camino(adyacentes: dict, inicio, fin) -> list:
+    """Encuentra el camino mas corto entre dos celdas usando BFS."""
+    if inicio == fin:
+        return [inicio]
+    cola_camino = [[inicio]]
+    visitados_camino = {inicio}
+    while cola_camino:
+        camino = cola_camino.pop(0)
+        celda_actual = camino[-1]
+        for vecino in adyacentes.get(celda_actual, []):
+            if vecino == fin:
+                return camino + [vecino]
+            if vecino not in visitados_camino:
+                visitados_camino.add(vecino)
+                cola_camino.append(camino + [vecino])
+    return []
+
+
+def construir_navegacion(adyacentes: dict, navigate_hlas: dict, inicio, fin) -> list:
+    """Construye una lista de HLAs Navigate desde inicio hasta fin."""
+    camino = encontrar_camino(adyacentes, inicio, fin)
+    refinamiento = []
+    for i in range(len(camino) - 1):
+        clave = (camino[i], camino[i + 1])
+        if clave in navigate_hlas:
+            refinamiento.append(navigate_hlas[clave])
+    return refinamiento
+
+
 def build_htn_hierarchy(problem: Problem) -> list[HLA]:
-    """
-    Build HTN HLAs for the rescue domain.
-
-    The hierarchy defines four HLA types:
-      - Navigate(from, to):       Move the robot step by step from one cell to another
-      - PrepareSupplies(s, m):    Collect supplies and set them up at the medical post
-      - ExtractPatient(p, m):     Pick up the patient and bring them to the medical post
-      - FullRescueMission(s,p,m): Complete one rescue: prepare supplies + extract + rescue
-
-    Refinements are built from the ground state to generate concrete Action objects.
-
-    Tip: Refinements for Navigate are all single-step Move sequences between
-         adjacent cells. PrepareSupplies and ExtractPatient chain Navigate HLAs
-         with primitive PickUp, SetupSupplies, PutDown, and Rescue actions.
-    """
     # Obtener los esquemas de accion del dominio
     esquema_mover = problem.domain[0]
     esquema_recoger = problem.domain[1]
@@ -138,7 +154,7 @@ def build_htn_hierarchy(problem: Problem) -> list[HLA]:
                 adyacentes[desde] = []
             adyacentes[desde].append(hasta)
 
-    # Construir Navigate HLAs para cada par de celdas adyacentes
+    # Construir un HLA Navigate por cada par de celdas adyacentes
     navigate_hlas = {}
     for desde in adyacentes:
         for hasta in adyacentes[desde]:
@@ -151,139 +167,75 @@ def build_htn_hierarchy(problem: Problem) -> list[HLA]:
             hla_nav = HLA(nombre_nav, [[accion_mover]])
             navigate_hlas[(desde, hasta)] = hla_nav
 
-    # Obtener posiciones del estado inicial
+    # Leer posiciones iniciales del estado
     pos_robot = None
     pos_suministros = {}
     pos_pacientes = {}
     puestos_medicos = []
 
     for fluente in problem.initial_state:
-        if fluente[0] == "At":
-            if fluente[1] == robot:
-                pos_robot = fluente[2]
-
-    for fluente in problem.initial_state:
-        if fluente[0] == "At":
-            nombre_entidad = str(fluente[1])
-            if nombre_entidad.startswith("supplies"):
-                pos_suministros[fluente[1]] = fluente[2]
-
-    for fluente in problem.initial_state:
-        if fluente[0] == "At":
-            nombre_entidad = str(fluente[1])
-            if nombre_entidad.startswith("patient"):
-                pos_pacientes[fluente[1]] = fluente[2]
-
-    for fluente in problem.initial_state:
-        if fluente[0] == "MedicalPost":
+        if fluente[0] == "At" and fluente[1] == robot:
+            pos_robot = fluente[2]
+        elif fluente[0] == "At" and str(fluente[1]).startswith("supplies"):
+            pos_suministros[fluente[1]] = fluente[2]
+        elif fluente[0] == "At" and str(fluente[1]).startswith("patient"):
+            pos_pacientes[fluente[1]] = fluente[2]
+        elif fluente[0] == "MedicalPost":
             puestos_medicos.append(fluente[1])
 
-    # Funcion para encontrar el camino entre dos celdas usando BFS
-    def encontrar_camino(inicio, fin):
-        if inicio == fin:
-            return [inicio]
-        cola_camino = [[inicio]]
-        visitados_camino = set()
-        visitados_camino.add(inicio)
-        while len(cola_camino) > 0:
-            camino = cola_camino.pop(0)
-            celda_actual = camino[-1]
-            if celda_actual in adyacentes:
-                for vecino in adyacentes[celda_actual]:
-                    if vecino == fin:
-                        return camino + [vecino]
-                    if vecino not in visitados_camino:
-                        visitados_camino.add(vecino)
-                        cola_camino.append(camino + [vecino])
-        return []
-
-    def construir_refinamiento_navegacion(inicio, fin):
-        """Construye una lista de HLAs Navigate desde inicio hasta fin."""
-        camino = encontrar_camino(inicio, fin)
-        refinamiento = []
-        for i in range(len(camino) - 1):
-            desde = camino[i]
-            hasta = camino[i + 1]
-            clave = (desde, hasta)
-            if clave in navigate_hlas:
-                refinamiento.append(navigate_hlas[clave])
-        return refinamiento
-
-    # Construir PrepareSupplies HLAs
-    refinamientos_preparar = []
-    for nom_suministro in pos_suministros:
-        pos_s = pos_suministros[nom_suministro]
-        for puesto in puestos_medicos:
-            refinamiento = []
-            navegaciones = construir_refinamiento_navegacion(pos_robot, pos_s)
-            for nav in navegaciones:
-                refinamiento.append(nav)
-            accion_recoger = esquema_recoger.ground({
-                "r": robot,
-                "obj": nom_suministro,
-                "loc": pos_s
-            })
-            refinamiento.append(accion_recoger)
-            navegaciones2 = construir_refinamiento_navegacion(pos_s, puesto)
-            for nav in navegaciones2:
-                refinamiento.append(nav)
-            accion_preparar = esquema_preparar.ground({
-                "r": robot,
-                "s": nom_suministro,
-                "loc": puesto
-            })
-            refinamiento.append(accion_preparar)
-            refinamientos_preparar.append(refinamiento)
-
-    # Construir ExtractPatient HLAs
-    refinamientos_extraer = []
-    for nom_paciente in pos_pacientes:
-        pos_p = pos_pacientes[nom_paciente]
-        for puesto in puestos_medicos:
-            refinamiento = []
-            navegaciones = construir_refinamiento_navegacion(pos_robot, pos_p)
-            for nav in navegaciones:
-                refinamiento.append(nav)
-            accion_recoger = esquema_recoger.ground({
-                "r": robot,
-                "obj": nom_paciente,
-                "loc": pos_p
-            })
-            refinamiento.append(accion_recoger)
-            navegaciones2 = construir_refinamiento_navegacion(pos_p, puesto)
-            for nav in navegaciones2:
-                refinamiento.append(nav)
-            accion_soltar = esquema_soltar.ground({
-                "r": robot,
-                "obj": nom_paciente,
-                "loc": puesto
-            })
-            refinamiento.append(accion_soltar)
-            refinamientos_extraer.append(refinamiento)
-
-    # Construir FullRescueMission HLAs
+    # Construir los refinamientos de FullRescueMission
+    # Cada refinamiento es: [PrepareSupplies HLA, ExtractPatient HLA, accion Rescue]
+    # Contexto de navegacion:
+    #   PrepareSupplies: el robot empieza en pos_robot y termina en puesto
+    #   ExtractPatient:  el robot empieza en puesto (despues de PrepareSupplies) y termina en puesto
     refinamientos_mision = []
-    for nom_suministro in pos_suministros:
-        for nom_paciente in pos_pacientes:
+
+    for nom_suministro, pos_s in pos_suministros.items():
+        for nom_paciente, pos_p in pos_pacientes.items():
             for puesto in puestos_medicos:
-                pos_pac = pos_pacientes[nom_paciente]
+
+                # --- Refinamiento de PrepareSupplies ---
+                # El robot navega de pos_robot a pos_s, recoge los suministros,
+                # navega de pos_s al puesto medico y los configura alli
+                ref_preparar = []
+                ref_preparar += construir_navegacion(adyacentes, navigate_hlas, pos_robot, pos_s)
+                ref_preparar.append(esquema_recoger.ground({
+                    "r": robot, "obj": nom_suministro, "loc": pos_s
+                }))
+                ref_preparar += construir_navegacion(adyacentes, navigate_hlas, pos_s, puesto)
+                ref_preparar.append(esquema_preparar.ground({
+                    "r": robot, "s": nom_suministro, "loc": puesto
+                }))
+
+                # --- Refinamiento de ExtractPatient ---
+                # El robot navega del puesto al paciente, lo recoge,
+                # navega de regreso al puesto y lo deposita alli
+                ref_extraer = []
+                ref_extraer += construir_navegacion(adyacentes, navigate_hlas, puesto, pos_p)
+                ref_extraer.append(esquema_recoger.ground({
+                    "r": robot, "obj": nom_paciente, "loc": pos_p
+                }))
+                ref_extraer += construir_navegacion(adyacentes, navigate_hlas, pos_p, puesto)
+                ref_extraer.append(esquema_soltar.ground({
+                    "r": robot, "obj": nom_paciente, "loc": puesto
+                }))
+
+                # Cada combinacion genera sus propios HLAs con un unico refinamiento
                 hla_preparar = HLA(
                     "PrepareSupplies(" + str(nom_suministro) + "," + str(puesto) + ")",
-                    refinamientos_preparar
+                    [ref_preparar]
                 )
                 hla_extraer = HLA(
                     "ExtractPatient(" + str(nom_paciente) + "," + str(puesto) + ")",
-                    refinamientos_extraer
+                    [ref_extraer]
                 )
                 accion_rescatar = esquema_rescatar.ground({
-                    "r": robot,
-                    "p": nom_paciente,
-                    "loc": puesto
+                    "r": robot, "p": nom_paciente, "loc": puesto
                 })
-                refinamiento = [hla_preparar, hla_extraer, accion_rescatar]
-                refinamientos_mision.append(refinamiento)
 
-    # HLA raiz
+                # Agregar el refinamiento completo a la mision
+                refinamientos_mision.append([hla_preparar, hla_extraer, accion_rescatar])
+
+    # HLA raiz que representa la mision completa de rescate
     hla_raiz = HLA("FullRescueMission", refinamientos_mision)
-
     return [hla_raiz]

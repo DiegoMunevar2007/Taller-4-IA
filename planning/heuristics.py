@@ -111,9 +111,8 @@ def ignoreDeleteListsHeuristic(
     # Empezar desde el estado actual
     estado_relajado = state
     pasos = 0
-    max_pasos = 100
 
-    while not goal.issubset(estado_relajado) and pasos < max_pasos:
+    while not goal.issubset(estado_relajado):
 
         # Obtener acciones aplicables en el estado actual
         acciones_aplicables = get_applicable_actions(estado_relajado, domain, objects)
