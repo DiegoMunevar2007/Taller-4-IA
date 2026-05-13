@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from collections.abc import Callable
 
 from planning.pddl import (
@@ -138,17 +139,17 @@ def forwardBFS(problem: Problem) -> list[Action]:
          avoid revisiting the same state twice (graph search, not tree search).
     """
     # Usar una cola FIFO para BFS
-    cola = Queue()
+    cola = deque()
     estado_inicial = problem.getStartState()
-    cola.push(estado_inicial)
+    cola.append(estado_inicial)
 
     # Diccionario para rastrear el camino: estado -> (estado_anterior, accion)
     padres = {}
     visitados = set()
     visitados.add(estado_inicial)
 
-    while not cola.isEmpty():
-        estado_actual = cola.pop()
+    while cola:
+        estado_actual = cola.popleft()
 
         # Revisar si ya llegamos a la meta
         if problem.isGoalState(estado_actual):
@@ -158,20 +159,20 @@ def forwardBFS(problem: Problem) -> list[Action]:
             estado = estado_actual
             while estado in padres:
                 estado_anterior, accion = padres[estado]
-                plan.insert(0, accion)
+                plan.append(accion)
                 estado = estado_anterior
+            plan.reverse()
             return plan
 
         # Obtener los sucesores del estado actual
         sucesores = problem.getSuccessors(estado_actual)
-
         for par in sucesores:
             siguiente_estado, accion, costo = par
 
             if siguiente_estado not in visitados:
                 visitados.add(siguiente_estado)
                 padres[siguiente_estado] = (estado_actual, accion)
-                cola.push(siguiente_estado)
+                cola.append(siguiente_estado)
 
     # No se encontro plan
     return []
@@ -223,70 +224,87 @@ def backwardSearch(problem: Problem) -> list[Action]:
          Skip subgoals that contain static predicates (MedicalPost, Adjacent,
          Pickable) that are false in the initial state — these are dead ends.
     """
-    # Obtener todas las acciones grounded posibles
     todas_las_acciones = get_all_groundings(problem.domain, problem.objects)
 
-    # Predicados estaticos que no cambian durante la ejecucion
-    predicados_estaticos = ["MedicalPost", "Adjacent", "Pickable"]
-
-    # Indice: para cada fluente especifico, que acciones lo agregan
-    # Esto permite obtener solo las acciones relevantes para cada subgoal
-    fluente_a_acciones = {}
+    # Predicados estáticos
+    predicados_dinamicos = set()
     for accion in todas_las_acciones:
+        for fluente in accion.add_list | accion.del_list:
+            predicados_dinamicos.add(fluente[0])
+
+    predicados_estaticos = set()
+    for fluente in problem.initial_state:
+        if fluente[0] not in predicados_dinamicos:
+            predicados_estaticos.add(fluente[0])
+
+    acciones_validas = [
+        a for a in todas_las_acciones
+        if all(
+            f[0] not in predicados_estaticos or f in problem.initial_state
+            for f in a.precond_pos
+        )
+    ]
+
+    fluente_a_acciones = defaultdict(list)
+    for accion in acciones_validas:
         for fluente in accion.add_list:
-            if fluente not in fluente_a_acciones:
-                fluente_a_acciones[fluente] = []
             fluente_a_acciones[fluente].append(accion)
 
-    # Usar cola (BFS) para encontrar el plan mas corto
-    cola = Queue()
-    cola.push((problem.goal, []))
-    visitados = set()
-    visitados.add(problem.goal)
+    def es_consistente(subgoal: State) -> bool:
+        posiciones = {}
+        for f in subgoal:
+            if f[0] == "At":
+                if f[1] in posiciones and posiciones[f[1]] != f[2]:
+                    return False
+                posiciones[f[1]] = f[2]
+            elif f[0] == "Holding":
+                if "HandsFree" in posiciones:
+                    return False
+                posiciones["Holding"] = f[1]
+            elif f[0] == "HandsFree":
+                if "Holding" in posiciones:
+                    return False
+                posiciones["HandsFree"] = f[1]
+        return True
 
-    while not cola.isEmpty():
-        subgoal, plan = cola.pop()
+    cola = deque()
+    goal_inicial = frozenset(problem.goal)
+    cola.append(goal_inicial)
+    visitados = {goal_inicial}
+    padres = {}
 
-        # Verificar si el subgoal se cumple desde el estado inicial
-        se_cumple = True
-        for fluente in subgoal:
-            if fluente not in problem.initial_state:
-                se_cumple = False
-                break
+    while cola:
+        subgoal = cola.popleft()
 
-        if se_cumple:
+        if subgoal.issubset(problem.initial_state):
+            plan = []
+            actual = subgoal
+            while actual in padres:
+                padre, accion = padres[actual]
+                plan.append(accion)
+                actual = padre
             return plan
 
-        # Usar el indice por fluente especifico para obtener acciones relevantes
-        acciones_vistas = set()
+        acciones_relevantes = set()
         for fluente in subgoal:
-            if fluente in fluente_a_acciones:
-                for accion in fluente_a_acciones[fluente]:
-                    if accion in acciones_vistas:
-                        continue
-                    acciones_vistas.add(accion)
+            acciones_relevantes.update(fluente_a_acciones.get(fluente, []))
 
-                    nuevo_subgoal = regress(subgoal, accion)
-                    if nuevo_subgoal is None:
-                        continue
+        for accion in acciones_relevantes:
+            nuevo_subgoal = regress(subgoal, accion)
+            if nuevo_subgoal is None:
+                continue
 
-                    # Verificar predicados estaticos falsos
-                    es_valido = True
-                    for fl in nuevo_subgoal:
-                        if fl[0] in predicados_estaticos:
-                            if fl not in problem.initial_state:
-                                es_valido = False
-                                break
+            if nuevo_subgoal in visitados:
+                continue
 
-                    if not es_valido:
-                        continue
+            if not es_consistente(nuevo_subgoal):
+                continue
 
-                    if nuevo_subgoal not in visitados:
-                        visitados.add(nuevo_subgoal)
-                        cola.push((nuevo_subgoal, [accion] + plan))
+            visitados.add(nuevo_subgoal)
+            padres[nuevo_subgoal] = (subgoal, accion)
+            cola.append(nuevo_subgoal)
 
     return []
-
 
 
 
@@ -336,8 +354,9 @@ def aStarPlanner(
             estado = estado_actual
             while estado in padres:
                 estado_anterior, accion = padres[estado]
-                plan.insert(0, accion)
+                plan.append(accion)
                 estado = estado_anterior
+            plan.reverse()
             return plan
 
         # Obtener sucesores
