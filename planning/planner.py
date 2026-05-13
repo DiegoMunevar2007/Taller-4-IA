@@ -137,6 +137,51 @@ def forwardBFS(problem: Problem) -> list[Action]:
     Tip: The state is a frozenset of fluents. Use problem.getSuccessors(state)
          to get (next_state, action, cost) triples. Track visited states to
          avoid revisiting the same state twice (graph search, not tree search).
+         
+    Implementación original:
+    cola = Queue()
+    estado_inicial = problem.getStartState()
+    cola.push(estado_inicial)
+    
+    # Mantener registro de estados visitados
+    visitados = set()
+    visitados.add(estado_inicial)
+    
+    # Mantener registro padre-acción para reconstruir el plan
+    padre = {}
+    accion_desde_padre = {}
+    padre[estado_inicial] = None
+    
+    # BFS
+    while not cola.isEmpty():
+        estado_actual = cola.pop()
+        
+        # Verificar si es estado objetivo
+        if problem.isGoalState(estado_actual):
+            # Reconstruir el plan
+            plan = []
+            estado_temp = estado_actual
+            while padre[estado_temp] is not None:
+                accion = accion_desde_padre[estado_temp]
+                plan.append(accion)
+                estado_temp = padre[estado_temp]
+            plan.reverse()
+            return plan
+        
+        # Explorar sucesores
+        sucesores = problem.getSuccessors(estado_actual)
+        for siguiente_estado, accion, costo in sucesores:
+            if siguiente_estado not in visitados:
+                visitados.add(siguiente_estado)
+                cola.push(siguiente_estado)
+                padre[siguiente_estado] = estado_actual
+                accion_desde_padre[siguiente_estado] = accion
+    
+    # No se encontró solución
+    return []
+    
+    Se hizo uso de IA para mejorar el rendimiento, utilizando un diccionario para almacenar el padre y la acción que llevó a cada estado, 
+    al igual que usar deque para la cola en lugar de la implementación original con Queue.
     """
     # Usar una cola FIFO para BFS
     cola = deque()
@@ -223,6 +268,75 @@ def backwardSearch(problem: Problem) -> list[Action]:
          (relevant actions). Use regress() to compute the new subgoal.
          Skip subgoals that contain static predicates (MedicalPost, Adjacent,
          Pickable) that are false in the initial state — these are dead ends.
+         
+    Implementación original:
+      # Obtener todas las acciones grounded posibles
+    todas_las_acciones = get_all_groundings(problem.domain, problem.objects)
+
+    # Predicados estaticos que no cambian durante la ejecucion
+    predicados_estaticos = ["MedicalPost", "Adjacent", "Pickable"]
+
+    # Indice: para cada fluente especifico, que acciones lo agregan
+    # Esto permite obtener solo las acciones relevantes para cada subgoal
+    fluente_a_acciones = {}
+    for accion in todas_las_acciones:
+        for fluente in accion.add_list:
+            if fluente not in fluente_a_acciones:
+                fluente_a_acciones[fluente] = []
+            fluente_a_acciones[fluente].append(accion)
+
+    # Usar cola (BFS) para encontrar el plan mas corto
+    cola = Queue()
+    cola.push((problem.goal, []))
+    visitados = set()
+    visitados.add(problem.goal)
+
+    while not cola.isEmpty():
+        subgoal, plan = cola.pop()
+
+        # Verificar si el subgoal se cumple desde el estado inicial
+        se_cumple = True
+        for fluente in subgoal:
+            if fluente not in problem.initial_state:
+                se_cumple = False
+                break
+
+        if se_cumple:
+            return plan
+
+        # Usar el indice por fluente especifico para obtener acciones relevantes
+        acciones_vistas = set()
+        for fluente in subgoal:
+            if fluente in fluente_a_acciones:
+                for accion in fluente_a_acciones[fluente]:
+                    if accion in acciones_vistas:
+                        continue
+                    acciones_vistas.add(accion)
+
+                    nuevo_subgoal = regress(subgoal, accion)
+                    if nuevo_subgoal is None:
+                        continue
+
+                    # Verificar predicados estaticos falsos
+                    es_valido = True
+                    for fl in nuevo_subgoal:
+                        if fl[0] in predicados_estaticos:
+                            if fl not in problem.initial_state:
+                                es_valido = False
+                                break
+
+                    if not es_valido:
+                        continue
+
+                    if nuevo_subgoal not in visitados:
+                        visitados.add(nuevo_subgoal)
+                        cola.push((nuevo_subgoal, [accion] + plan))
+
+    return []
+    
+    Se hizo uso de IA para mejorar el rendimiento, sin embargo,
+    no se obtuvo una mejora significativa; de todas formas, se implementó un diccionario para almacenar las acciones relevantes para cada fluente específico
+    y se utilizó deque para la cola en lugar de la implementación original con Queue.
     """
     todas_las_acciones = get_all_groundings(problem.domain, problem.objects)
 
@@ -275,6 +389,7 @@ def backwardSearch(problem: Problem) -> list[Action]:
 
     while cola:
         subgoal = cola.popleft()
+        problem._expanded += 1
 
         if subgoal.issubset(problem.initial_state):
             plan = []

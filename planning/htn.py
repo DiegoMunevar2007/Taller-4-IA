@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from planning.pddl import Action, Problem, apply_action, is_applicable
+from planning.utils import Queue
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,6 @@ def hierarchicalSearch(problem: Problem, hlas: list[HLA]) -> list[Action]:
          To simulate execution, apply each action in order using apply_action().
     """
     # El plan inicial contiene el primer HLA de la lista
-    from planning.utils import Queue
     plan_inicial = [hlas[0]]
 
     # Buscar el indice del primer HLA en el plan inicial
@@ -75,6 +75,7 @@ def hierarchicalSearch(problem: Problem, hlas: list[HLA]) -> list[Action]:
 
     while not cola.isEmpty():
         plan, indice_hla = cola.pop()
+        problem._expanded += 1
 
         if indice_hla == -1:
             # El plan es completamente primitivo
@@ -194,7 +195,6 @@ def build_htn_hierarchy(problem: Problem) -> list[HLA]:
         for nom_paciente, pos_p in pos_pacientes.items():
             for puesto in puestos_medicos:
 
-                # --- Refinamiento de PrepareSupplies ---
                 # El robot navega de pos_robot a pos_s, recoge los suministros,
                 # navega de pos_s al puesto medico y los configura alli
                 ref_preparar = []
@@ -207,7 +207,6 @@ def build_htn_hierarchy(problem: Problem) -> list[HLA]:
                     "r": robot, "s": nom_suministro, "loc": puesto
                 }))
 
-                # --- Refinamiento de ExtractPatient ---
                 # El robot navega del puesto al paciente, lo recoge,
                 # navega de regreso al puesto y lo deposita alli
                 ref_extraer = []

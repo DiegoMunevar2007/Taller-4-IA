@@ -1,6 +1,32 @@
 from __future__ import annotations
 
-from planning.pddl import ActionSchema, State, Objects, get_all_groundings, get_applicable_actions
+from itertools import product
+from planning.pddl import ActionSchema, Action, State, Objects
+
+
+def _ground_goal_relevant(domain: list[ActionSchema], objects: Objects,
+                          goal: State) -> list[Action]:
+    """Ground only schemas whose add_list can produce goal predicates."""
+    goal_predicates = {f[0] for f in goal}
+    type_map = {
+        "r": objects["robots"], "loc": objects["cells"],
+        "from_cell": objects["cells"], "to_cell": objects["cells"],
+        "obj": objects["objects"], "s": objects["supplies"],
+        "p": objects["patients"],
+    }
+    groundings = []
+    for schema in domain:
+        if not any(f[0] in goal_predicates for f in schema.add_list):
+            continue
+        domains = [type_map.get(p, []) for p in schema.parameters]
+        if any(len(d) == 0 for d in domains):
+            continue
+        for values in product(*domains):
+            if schema.name == "Move" and len(set(values)) < len(values):
+                continue
+            binding = dict(zip(schema.parameters, values))
+            groundings.append(schema.ground(binding))
+    return groundings
 
 
 def nullHeuristic(
@@ -34,36 +60,33 @@ def ignorePreconditionsHeuristic(
     a lower bound on the true plan length → this heuristic is admissible.
 
     Algorithm (greedy set cover):
-      1. Compute unsatisfied = goal − state  (fluents still needed).
+      1. Compute unsatisfied = goal - state  (fluents still needed).
       2. Ground all actions ignoring preconditions and collect their add_lists.
       3. Greedily pick the action whose add_list covers the most unsatisfied fluents.
       4. Repeat until all fluents are covered; count the actions used.
-
-    Tip: frozenset supports set difference (-) and intersection (&).
-         You only need to ground actions once per call (use get_applicable_actions
-         with the initial state, or generate all groundings regardless of state).
-         Remember: with no preconditions, every grounding is "applicable".
     """
-    # Calcular los fluentes de la meta que aun no estan en el estado
     insatisfechos = goal - state
-    if len(insatisfechos) == 0:
+    if not insatisfechos:
         return 0
 
-    # Obtener todas las acciones grounded (sin precondiciones, todas son aplicables)
-    todas_las_acciones = get_all_groundings(domain, objects)
+    todas_las_acciones = _ground_goal_relevant(domain, objects, goal)
+
+    fluente_a_acciones = {}
+    for accion in todas_las_acciones:
+        for fluente in accion.add_list:
+            if fluente in insatisfechos:
+                fluente_a_acciones.setdefault(fluente, []).append(accion)
 
     pasos = 0
+    while insatisfechos:
+        acciones_candidatas = set()
+        for fluente in insatisfechos:
+            acciones_candidatas.update(fluente_a_acciones.get(fluente, []))
 
-    while len(insatisfechos) > 0:
         mejor_accion = None
         mejor_cuenta = -1
-
-        # Buscar la accion que cubra mas fluentes insatisfechos
-        for accion in todas_las_acciones:
-            cuenta = 0
-            for fluente in accion.add_list:
-                if fluente in insatisfechos:
-                    cuenta = cuenta + 1
+        for accion in acciones_candidatas:
+            cuenta = len(accion.add_list & insatisfechos)
             if cuenta > mejor_cuenta:
                 mejor_cuenta = cuenta
                 mejor_accion = accion
@@ -71,10 +94,8 @@ def ignorePreconditionsHeuristic(
         if mejor_cuenta <= 0:
             break
 
-        # Remover los fluentes cubiertos por la mejor accion
-        insatisfechos = insatisfechos - mejor_accion.add_list
-
-        pasos = pasos + 1
+        insatisfechos -= mejor_accion.add_list
+        pasos += 1
 
     return pasos
 
@@ -102,33 +123,35 @@ def ignoreDeleteListsHeuristic(
       2. At each step, pick the grounded action that adds the most unsatisfied
          goal fluents (greedy hill-climbing).
       3. Count steps until all goal fluents are satisfied (or until no progress).
-
-    Tip: In the relaxed problem, apply_action never removes fluents.
-         You can implement this by treating del_list as empty for all actions.
-         Use get_applicable_actions to enumerate applicable grounded actions at
-         each step (preconditions still apply in the relaxed model).
     """
-    # Empezar desde el estado actual
+    todas_las_acciones = _ground_goal_relevant(domain, objects, goal)
+
+    insatisfechos = goal - state
+    if not insatisfechos:
+        return 0
+
+    fluente_a_acciones = {}
+    for accion in todas_las_acciones:
+        for fluente in accion.add_list:
+            if fluente in goal:
+                fluente_a_acciones.setdefault(fluente, []).append(accion)
+
     estado_relajado = state
     pasos = 0
 
-    while not goal.issubset(estado_relajado):
-
-        # Obtener acciones aplicables en el estado actual
-        acciones_aplicables = get_applicable_actions(estado_relajado, domain, objects)
-
-        if len(acciones_aplicables) == 0:
-            break
+    while insatisfechos:
+        acciones_candidatas = set()
+        for fluente in insatisfechos:
+            acciones_candidatas.update(fluente_a_acciones.get(fluente, []))
 
         mejor_accion = None
         mejor_cuenta = -1
-
-        # Buscar la accion que agregue mas fluentes de la meta aun no satisfechos
-        for accion in acciones_aplicables:
-            cuenta = 0
-            for fluente in accion.add_list:
-                if fluente in goal and fluente not in estado_relajado:
-                    cuenta = cuenta + 1
+        for accion in acciones_candidatas:
+            if not accion.precond_pos.issubset(estado_relajado):
+                continue
+            if not accion.precond_neg.isdisjoint(estado_relajado):
+                continue
+            cuenta = len(accion.add_list & insatisfechos)
             if cuenta > mejor_cuenta:
                 mejor_cuenta = cuenta
                 mejor_accion = accion
@@ -136,8 +159,8 @@ def ignoreDeleteListsHeuristic(
         if mejor_cuenta <= 0:
             break
 
-        # Aplicar la accion sin borrar (solo agregar, ignorar del_list)
-        estado_relajado = estado_relajado | mejor_accion.add_list
-        pasos = pasos + 1
+        estado_relajado |= mejor_accion.add_list
+        insatisfechos -= mejor_accion.add_list
+        pasos += 1
 
     return pasos
